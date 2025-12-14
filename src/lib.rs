@@ -100,47 +100,78 @@ pub enum DecaesarError {
     InvalidShift(u8),
 }
 
-fn shift_byte(b: u8, shift: u8) -> u8 {
-    if b.is_ascii_lowercase() {
-        ((b - b'a' + shift) % 26) + b'a'
-    } else if b.is_ascii_uppercase() {
-        ((b - b'A' + shift) % 26) + b'A'
-    } else {
-        b
-    }
+pub trait ScoreFunction {
+    fn score(&self, input: &[u8], shift: u8) -> f32;
 }
 
-fn score_shift(input: &[u8], shift: u8) -> f32 {
-    let mut score: f32 = 0.0;
-    let mut prev: u8 = 0;
+pub struct DefaultScorer;
 
-    for &i in input {
-        let b = i.to_ascii_lowercase();
-        let shifted_b = shift_byte(b, shift);
+impl ScoreFunction for DefaultScorer {
+    fn score(&self, input: &[u8], shift: u8) -> f32 {
+        let mut score: f32 = 0.0;
+        let mut prev: u8 = 0;
 
-        for (a, b) in COMMON_BIGRAMS {
-            // score based on bigram frequency eg. th is a lot more common than ee
-            if a == prev && b == shifted_b {
-                score += 20.0;
+        for &i in input {
+            let b = i.to_ascii_lowercase();
+            let shifted = shift_byte(b, shift);
+
+            for (a, b) in COMMON_BIGRAMS {
+                if a == prev && b == shifted {
+                    score += 20.0;
+                    break;
+                }
+            }
+
+            if shifted.is_ascii_lowercase() {
+                score += LETTER_WEIGHTS[(shifted - b'a') as usize];
+                prev = shifted;
+            } else {
+                prev = 0;
             }
         }
 
-        if shifted_b.is_ascii_lowercase() {
-            score += LETTER_WEIGHTS[(shifted_b - b'a') as usize]; // score based on letter frequency e.g e and a are a lot more frequent than z
-            prev = shifted_b;
-        } else {
-            prev = 0;
-        }
+        score
     }
-    score
 }
 
-fn decipher(input: &[u8], shift: u8) -> DecipherResult {
-    let score = score_shift(input, shift);
+pub struct Decaesar<S> {
+    scorer: S,
+}
 
-    DecipherResult {
-        shift: shift,
-        score: score,
+impl<S: ScoreFunction> Decaesar<S> {
+    pub const fn new(scorer: S) -> Self {
+        Self { scorer }
+    }
+
+    // For a given string in byte representation (char slice, pointer to the contiguous byte buffer + length), brute force all possible shifts and score them
+    pub fn break_caesar(&self, input: &[u8]) -> Result<DecaesarResult, DecaesarError> {
+        if input.is_empty() {
+            return Err(DecaesarError::EmptyInput);
+        }
+
+        let mut results: [DecipherResult; 26] = [DecipherResult {
+            shift: 0,
+            score: 0.0,
+        }; 26];
+        let mut best = DecipherResult {
+            shift: 0,
+            score: f32::NEG_INFINITY,
+        };
+
+        let mut shift: u8 = 0;
+        while shift < 26 {
+            let score = self.scorer.score(input, shift);
+            let r = DecipherResult { shift, score };
+            results[shift as usize] = r;
+
+            if r.score > best.score {
+                best = r;
+            }
+
+            shift += 1;
+        }
+
+        Ok(DecaesarResult { best, results })
     }
 }
 
@@ -166,30 +197,12 @@ pub fn decode_caesar(input: &[u8], output: &mut [u8], shift: u8) -> Result<(), D
     Ok(())
 }
 
-// For a given string in byte representation (char slice, pointer to the contiguous byte buffer + length), brute force all possible shifts and score them
-pub fn break_caesar(input: &[u8]) -> Result<DecaesarResult, DecaesarError> {
-    if input.is_empty() {
-        return Err(DecaesarError::EmptyInput);
+fn shift_byte(b: u8, shift: u8) -> u8 {
+    if b.is_ascii_lowercase() {
+        ((b - b'a' + shift) % 26) + b'a'
+    } else if b.is_ascii_uppercase() {
+        ((b - b'A' + shift) % 26) + b'A'
+    } else {
+        b
     }
-
-    let mut decipher_results: [DecipherResult; 26] = [Default::default(); 26];
-
-    let mut best = 0.0;
-    let mut best_shift = 0;
-
-    for i in 0..=25 {
-        decipher_results[i as usize] = decipher(input, i as u8);
-        if decipher_results[i as usize].score > best {
-            best = decipher_results[i as usize].score;
-            best_shift = i;
-        }
-    }
-
-    Ok(DecaesarResult {
-        best: DecipherResult {
-            shift: best_shift,
-            score: best,
-        },
-        results: decipher_results,
-    })
 }
